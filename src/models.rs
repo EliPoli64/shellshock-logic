@@ -25,7 +25,7 @@ pub enum GameAction {
     Reload,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum ItemType {
     Beer,
     Cigarette,
@@ -64,18 +64,20 @@ pub struct MoveRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MatchHistory {
+    #[serde(rename = "_id")]
     pub id: Uuid,
     pub room_pubkey: String,
     pub player1: String,
     pub player2: String,
     pub winner: Option<String>,
-    pub total_bet: u64,
+    pub total_bet: i64,
     pub started_at: DateTime<Utc>,
     pub ended_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MoveHistory {
+    #[serde(rename = "_id")]
     pub id: Uuid,
     pub match_id: Uuid,
     pub player_wallet: String,

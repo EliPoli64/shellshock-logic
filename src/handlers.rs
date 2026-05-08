@@ -3,10 +3,13 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use crate::models::{MoveRequest, MatchHistory, MoveHistory, GameState, GamePhase, ShellType};
+use crate::models::{MoveRequest, MatchHistory, MoveHistory};
 use crate::AppState;
 use crate::logic::GameLogic;
 use std::sync::Arc;
+use uuid::Uuid;
+use mongodb::bson::doc;
+use futures_util::stream::StreamExt;
 use chrono::Utc;
 
 pub async fn health_check() -> impl IntoResponse {
@@ -34,39 +37,29 @@ pub async fn execute_action(
     // 3. Process logic (Off-chain mirror)
     match GameLogic::process_action(&mut game_state, &payload.action, &payload.item_type) {
         Ok(result) => {
-            tracing::info!("Action processed: {}", result);
+            tracing::info!("Action processed: {}", &result);
             
             // 4. Submit to Solana (Simplified)
-            // In a real app, you'd build the actual instruction here
-            // let instruction = ...;
-            // if let Err(e) = state.solana.send_game_action(instruction).await {
-            //     return (StatusCode::INTERNAL_SERVER_ERROR, Json(format!("Solana error: {}", e))).into_response();
-            // }
+            // ...
 
             // 5. Persist move to database
             let match_uuid = match Uuid::parse_str(&match_id) {
                 Ok(uuid) => uuid,
-                Err(_) => {
-                    // If it's not a UUID, we might need a different way to link it
-                    // For now, let's assume match_id in the URL is the room_pubkey
-                    // We'd need to look up the match ID by room_pubkey
-                    Uuid::new_v4() // Placeholder
-                }
+                Err(_) => Uuid::new_v4(),
             };
 
-            let _ = sqlx::query!(
-                r#"
-                INSERT INTO moves (match_id, player_wallet, action, item_type, result)
-                VALUES ($1, $2, $3, $4, $5)
-                "#,
-                match_uuid,
-                payload.player_wallet,
-                format!("{:?}", payload.action),
-                payload.item_type.map(|i| format!("{:?}", i)),
-                result
-            )
-            .execute(&state.db)
-            .await;
+            let move_history = MoveHistory {
+                id: Uuid::new_v4(),
+                match_id: match_uuid,
+                player_wallet: payload.player_wallet.clone(),
+                action: format!("{:?}", payload.action),
+                item_type: payload.item_type.map(|i| format!("{:?}", i)),
+                result: result.clone(),
+                created_at: Utc::now(),
+            };
+
+            let collection = state.db.collection::<MoveHistory>("moves");
+            let _ = collection.insert_one(move_history, None).await;
 
             (StatusCode::OK, Json(result)).into_response()
         }
@@ -80,23 +73,29 @@ pub async fn get_player_history(
 ) -> impl IntoResponse {
     tracing::debug!("Fetching history for player {}", wallet);
     
-    let result = sqlx::query_as!(
-        MatchHistory,
-        r#"
-        SELECT id, room_pubkey, player1, player2, winner, total_bet as "total_bet!", started_at, ended_at
-        FROM matches
-        WHERE player1 = $1 OR player2 = $1
-        ORDER BY started_at DESC
-        "#,
-        wallet
-    )
-    .fetch_all(&state.db)
-    .await;
+    let collection = state.db.collection::<MatchHistory>("matches");
+    let filter = doc! {
+        "$or": [
+            { "player1": &wallet },
+            { "player2": &wallet }
+        ]
+    };
+    
+    let options = mongodb::options::FindOptions::builder()
+        .sort(doc! { "started_at": -1 })
+        .build();
 
-    match result {
-        Ok(history) => (StatusCode::OK, Json(history)).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(e.to_string())).into_response(),
-    }
+    let cursor = match collection.find(filter, options).await {
+        Ok(cursor) => cursor,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(e.to_string())).into_response(),
+    };
+
+    let history: Vec<MatchHistory> = cursor.collect::<Vec<_>>().await
+        .into_iter()
+        .filter_map(Result::ok)
+        .collect();
+
+    (StatusCode::OK, Json(history)).into_response()
 }
 
 pub async fn get_match_details(
@@ -110,21 +109,21 @@ pub async fn get_match_details(
         Err(_) => return (StatusCode::BAD_REQUEST, Json("Invalid match ID")).into_response(),
     };
 
-    let result = sqlx::query_as!(
-        MoveHistory,
-        r#"
-        SELECT id, match_id, player_wallet, action, item_type, result, created_at
-        FROM moves
-        WHERE match_id = $1
-        ORDER BY created_at ASC
-        "#,
-        match_uuid
-    )
-    .fetch_all(&state.db)
-    .await;
+    let collection = state.db.collection::<MoveHistory>("moves");
+    let filter = doc! { "match_id": match_uuid };
+    let options = mongodb::options::FindOptions::builder()
+        .sort(doc! { "created_at": 1 })
+        .build();
 
-    match result {
-        Ok(details) => (StatusCode::OK, Json(details)).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(e.to_string())).into_response(),
-    }
+    let cursor = match collection.find(filter, options).await {
+        Ok(cursor) => cursor,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(e.to_string())).into_response(),
+    };
+
+    let details: Vec<MoveHistory> = cursor.collect::<Vec<_>>().await
+        .into_iter()
+        .filter_map(Result::ok)
+        .collect();
+
+    (StatusCode::OK, Json(details)).into_response()
 }

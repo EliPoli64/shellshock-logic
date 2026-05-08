@@ -1,4 +1,4 @@
-use crate::models::{GameState, GameAction, ItemType, ShellType, PlayerState};
+use crate::models::{GameState, GameAction, ItemType, ShellType};
 use anyhow::{anyhow, Result};
 
 pub struct GameLogic;

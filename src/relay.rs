@@ -1,7 +1,7 @@
-use futures_util::{StreamExt, SinkExt};
+use futures_util::StreamExt;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use url::Url;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use crate::models::GameState;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -23,7 +23,7 @@ impl RelayService {
     pub async fn start(&self) -> Result<()> {
         let url = Url::parse(&format!("{}/ws", self.relay_url))?;
         let (ws_stream, _) = connect_async(url).await?;
-        let (mut write, mut read) = ws_stream.split();
+        let (_write, mut read) = ws_stream.split();
 
         tracing::info!("Connected to Relay WebSocket");
 
