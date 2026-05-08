@@ -16,24 +16,32 @@ pub struct SolanaService {
 
 impl SolanaService {
     pub fn new(rpc_url: &str, authority_key: &str, program_id: &str) -> Result<Self> {
-        let client = RpcClient::new(rpc_url.to_string());
-        
-        // Load authority keypair from base58 string or file path
-        let authority = if let Ok(key_bytes) = bs58::decode(authority_key).into_vec() {
-            Keypair::from_bytes(&key_bytes).map_err(|e| anyhow::anyhow!("Invalid key bytes: {}", e))?
-        } else {
-            // Fallback to loading from file or other methods if needed
-            return Err(anyhow::anyhow!("Failed to decode authority key"));
-        };
+      let client = RpcClient::new(rpc_url.to_string());
+      
+      // Clean the string in case there are surrounding quotes or spaces from the .env
+      let cleaned_key = authority_key.trim().trim_matches('"');
 
-        let program_id = Pubkey::from_str(program_id)?;
+      let authority = if cleaned_key.starts_with('[') {
+          // Force JSON parsing if it looks like an array
+          let bytes: Vec<u8> = serde_json::from_str(cleaned_key)
+              .map_err(|e| anyhow::anyhow!("JSON array parse error: {}. Key started with '[' but failed.", e))?;
+          Keypair::from_bytes(&bytes)?
+      } else {
+          // Assume Base58 otherwise
+          let bytes = bs58::decode(cleaned_key)
+              .into_vec()
+              .map_err(|e| anyhow::anyhow!("Base58 decode error: {}", e))?;
+          Keypair::from_bytes(&bytes)?
+      };
 
-        Ok(Self {
-            client,
-            authority,
-            program_id,
-        })
-    }
+      let program_id = Pubkey::from_str(program_id)?;
+
+      Ok(Self {
+          client,
+          authority,
+          program_id,
+      })
+  }
 
     pub async fn send_game_action(
         &self,
