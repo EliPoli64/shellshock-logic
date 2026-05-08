@@ -1,11 +1,15 @@
-use solana_client::rpc_client::RpcClient;
+use solana_client::{
+    rpc_client::RpcClient,
+    rpc_request::RpcError,
+    client_error::ClientErrorKind,
+};
 use solana_sdk::{
     signature::{Keypair, Signer},
     pubkey::Pubkey,
     transaction::Transaction,
     instruction::Instruction,
 };
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use std::str::FromStr;
 
 pub struct SolanaService {
@@ -18,19 +22,16 @@ impl SolanaService {
     pub fn new(rpc_url: &str, authority_key: &str, program_id: &str) -> Result<Self> {
       let client = RpcClient::new(rpc_url.to_string());
       
-      // Clean the string in case there are surrounding quotes or spaces from the .env
       let cleaned_key = authority_key.trim().trim_matches('"');
 
       let authority = if cleaned_key.starts_with('[') {
-          // Force JSON parsing if it looks like an array
           let bytes: Vec<u8> = serde_json::from_str(cleaned_key)
-              .map_err(|e| anyhow::anyhow!("JSON array parse error: {}. Key started with '[' but failed.", e))?;
+              .map_err(|e| anyhow!("JSON array parse error: {}. Key started with '[' but failed.", e))?;
           Keypair::from_bytes(&bytes)?
       } else {
-          // Assume Base58 otherwise
           let bytes = bs58::decode(cleaned_key)
               .into_vec()
-              .map_err(|e| anyhow::anyhow!("Base58 decode error: {}", e))?;
+              .map_err(|e| anyhow!("Base58 decode error: {}", e))?;
           Keypair::from_bytes(&bytes)?
       };
 
@@ -56,8 +57,33 @@ impl SolanaService {
             recent_blockhash,
         );
 
-        let signature = self.client.send_and_confirm_transaction(&tx)?;
-        Ok(signature.to_string())
+        match self.client.send_and_confirm_transaction(&tx) {
+            Ok(signature) => Ok(signature.to_string()),
+            Err(e) => {
+                if let ClientErrorKind::RpcError(RpcError::RpcResponseError { 
+                    code: _, 
+                    message, 
+                    data: _, 
+                }) = &e.kind() {
+                    tracing::error!("Solana Transaction Error: {}", message);
+                    
+                    if message.contains("Attempt to debit an account but found no record of a prior credit") {
+                        tracing::warn!("Authority account {} has no SOL. Attempting to airdrop on devnet...", self.authority.pubkey());
+                        // Attempt airdrop on devnet if possible
+                        if let Ok(_) = self.client.request_airdrop(&self.authority.pubkey(), 1_000_000_000) {
+                            tracing::info!("Airdrop requested successfully. Please retry the transaction.");
+                        }
+                    }
+                }
+                
+                // Detailed error extraction for SendTransactionError
+                if let ClientErrorKind::TransactionError(tx_err) = &e.kind() {
+                     tracing::error!("Transaction Error Detail: {:?}", tx_err);
+                }
+
+                Err(anyhow!("Solana transaction failed: {}", e))
+            }
+        }
     }
 
     pub fn get_program_id(&self) -> Pubkey {
