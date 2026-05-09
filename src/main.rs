@@ -72,6 +72,7 @@ async fn main() {
         .route("/match/pve/start", post(pve_handlers::start_pve_match))
         .route("/match/pve/:match_id/action", post(pve_handlers::execute_pve_action))
         .route("/match/pve/:match_id/dealer-turn", post(pve_handlers::execute_pve_dealer_turn))
+        .route("/match/:match_id/dealer-turn", post(handlers::dealer_turn))
         .route("/match/:match_id/action", post(handlers::execute_action))
         .route("/player/:wallet/history", get(handlers::get_player_history))
         .route("/match/:match_id/details", get(handlers::get_match_details))

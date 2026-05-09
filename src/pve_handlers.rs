@@ -12,7 +12,7 @@ use rand::seq::SliceRandom;
 use crate::AppState;
 use crate::models::{
     PvEStartRequest, PvEStartResponse, PvEStateFlat, PvEActionResponse, PvEStateUpdate,
-    PvEDealerAction, PvEDealerTurnResponse, PvEMatch, ShellType,
+    PvEDealerAction, PvEDealerTurnResponse, PvEMatch, ShellType, PvEInitialState, ItemCounts,
 };
 
 #[derive(Debug, serde::Deserialize)]
@@ -63,7 +63,7 @@ pub async fn start_pve_match(
         id: match_id,
         wallet: payload.wallet.clone(),
         bet_lamports: payload.bet_lamports,
-        state: initial_state.clone(),
+        state: initial_state,
         chamber,
         game_status: "playing".to_string(),
         is_saw_active: false,
@@ -74,10 +74,22 @@ pub async fn start_pve_match(
     let collection = state.db.collection::<PvEMatch>("pve_matches");
     let _ = collection.insert_one(pve_match, None).await;
 
+    let response_state = PvEInitialState {
+        player_health: 3,
+        dealer_health: 3,
+        shells_remaining: 6,
+        live_shells: 3,
+        blank_shells: 3,
+        items: ItemCounts { magnifying_glass: 1, beer: 1, handcuffs: 1, cigarettes: 1, saw: 1, pill: 1 },
+        dealer_items: ItemCounts { magnifying_glass: 1, beer: 1, handcuffs: 1, cigarettes: 1, saw: 1, pill: 1 },
+        is_player_turn: true,
+    };
+
     (StatusCode::OK, Json(PvEStartResponse {
         success: true,
-        match_id: match_id.to_string(),
-        initial_state,
+        match_id: Some(match_id.to_string()),
+        initial_state: Some(response_state),
+        error: None,
     })).into_response()
 }
 

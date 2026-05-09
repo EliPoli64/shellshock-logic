@@ -1,0 +1,12 @@
+[package]
+name = "buckshot"
+version = "0.1.0"
+edition = "2021"
+description = "Buckshot Roulette (PvP) — escrow + core shoot instruction"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "buckshot"
+
+[dependencies]
+anchor-lang = "0.30.1"
