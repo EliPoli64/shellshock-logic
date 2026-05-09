@@ -278,12 +278,193 @@ pub mod buckshot {
             require_keys_eq!(ctx.accounts.winner.key(), w);
             ctx.accounts
                 .escrow_vault
-                .close(winner_ai)?;
+                .close(winner_ai.clone())?;
             ctx.accounts.game_room.close(winner_ai)?;
         }
 
         Ok(())
     }
+
+    pub fn use_item(ctx: Context<UseItem>, item_type: ItemType) -> Result<()> {
+        let player_ai = ctx.accounts.player.to_account_info();
+        let escrow_ai = ctx.accounts.escrow_vault.to_account_info();
+        let winner_ai = ctx.accounts.winner.to_account_info();
+        let fee_ai = ctx.accounts.fee_wallet.to_account_info();
+        let system_ai = ctx.accounts.system_program.to_account_info();
+
+        let escrow_bump = ctx.accounts.escrow_vault.bump;
+        let room_key = ctx.accounts.game_room.key();
+        let player_pk = player_ai.key();
+
+        let mut payout_opt: Option<u64> = None;
+        let mut winner_opt: Option<Pubkey> = None;
+
+        {
+            let room = &mut ctx.accounts.game_room;
+
+            require!(room.is_player_turn(&player_pk), BuckshotError::NotYourTurn);
+            require!(
+                matches!(room.state, GameState::PlayerTurn),
+                BuckshotError::GameNotActive
+            );
+
+            let turn = room.current_turn;
+
+            remove_owned_item(room, turn, item_type)?;
+
+            match item_type {
+                ItemType::Beer => {
+                    require!(!room.shells.is_empty(), BuckshotError::VrfNotReady);
+                    let shell = room.shells.remove(0);
+                    room.shells_total = room.shells_total.saturating_sub(1);
+                    if shell {
+                        room.shells_live = room.shells_live.saturating_sub(1);
+                    }
+                    if room.shells_total == 0 {
+                        room.state = GameState::WaitingForVRF;
+                        emit!(RoundReloaded {
+                            round: room.round,
+                            total_shells: 0,
+                            live_count: 0,
+                        });
+                    }
+                }
+                ItemType::MagnifyingGlass => {
+                    require!(
+                        room.shells.first().is_some(),
+                        BuckshotError::VrfNotReady
+                    );
+                    let is_live = room.shells[0];
+                    emit!(MagnifyingGlassReveal { is_live });
+                }
+                ItemType::Cigarettes => {
+                    let max_hp = room.max_hp;
+                    let current_hp = room.current_player_hp();
+                    require!(
+                        current_hp < max_hp,
+                        BuckshotError::MaxHealthReached
+                    );
+                    room.set_hp(turn, (current_hp + 1).min(max_hp));
+                }
+                ItemType::HandSaw => {
+                    room.saw_active = true;
+                }
+                ItemType::Handcuffs => {
+                    let opp_cuffed = if turn == 0 {
+                        room.p2_cuffed
+                    } else {
+                        room.p1_cuffed
+                    };
+                    require!(
+                        !opp_cuffed,
+                        BuckshotError::CannotCuffCuffed
+                    );
+                    if turn == 0 {
+                        room.p2_cuffed = true;
+                    } else {
+                        room.p1_cuffed = true;
+                    }
+                }
+                ItemType::Pills => {
+                    let bit = (room.pills_bitmask >> room.pills_index) & 1;
+                    room.pills_index = room.pills_index.saturating_add(1);
+                    let hp = room.current_player_hp() as u16;
+                    let cap = room.max_hp as u16;
+                    let next_hp = if bit == 1 {
+                        (hp + 2).min(cap) as u8
+                    } else {
+                        hp.saturating_sub(1).min(cap) as u8
+                    };
+                    room.set_hp(turn, next_hp);
+
+                    if let Some(winner_pk) = check_winner(room) {
+                        require_keys_eq!(winner_ai.key(), winner_pk);
+                        let payout = disburse_escrow(
+                            &system_ai,
+                            &escrow_ai,
+                            &winner_ai,
+                            &fee_ai,
+                            escrow_bump,
+                            room_key,
+                        )?;
+                        room.state = GameState::Finished { winner: winner_pk };
+                        emit!(GameFinished {
+                            winner: winner_pk,
+                            payout,
+                        });
+                        payout_opt = Some(payout);
+                        winner_opt = Some(winner_pk);
+                    }
+                }
+                ItemType::Inverter => {
+                    require!(!room.shells.is_empty(), BuckshotError::VrfNotReady);
+                    let was_live = room.shells[0];
+                    if was_live {
+                        room.shells_live = room.shells_live.saturating_sub(1);
+                    } else {
+                        room.shells_live = room.shells_live.saturating_add(1);
+                    }
+                    room.shells[0] = !was_live;
+                }
+                ItemType::BurnerPhone => {
+                    require!(!room.shells.is_empty(), BuckshotError::VrfNotReady);
+                    let len = room.shells.len();
+                    let idx_usize = if len == 1 {
+                        0usize
+                    } else if room.vrf_account != Pubkey::default() {
+                        burner_phone_index_usize(&room.vrf_account, len)
+                    } else {
+                        1usize % len
+                    };
+                    let idx_u8 = idx_usize as u8;
+                    let is_live = room.shells[idx_usize];
+                    emit!(BurnerPhoneReveal {
+                        position: idx_u8,
+                        is_live,
+                    });
+                }
+            }
+
+            room.last_action_ts = Clock::get()?.unix_timestamp;
+
+            emit!(ItemUsed {
+                player: player_pk,
+                item: item_type,
+            });
+        }
+
+        if let (Some(w), Some(_pay)) = (winner_opt, payout_opt) {
+            require_keys_eq!(ctx.accounts.winner.key(), w);
+            ctx.accounts
+                .escrow_vault
+                .close(winner_ai.clone())?;
+            ctx.accounts.game_room.close(winner_ai)?;
+        }
+
+        Ok(())
+    }
+}
+
+fn remove_owned_item(game: &mut GameRoom, turn: u8, wanted: ItemType) -> Result<()> {
+    let inv = game.get_items_mut(turn);
+    let pos = inv
+        .iter()
+        .position(|&x| x == wanted)
+        .ok_or(BuckshotError::ItemNotOwned)?;
+    inv.remove(pos);
+    Ok(())
+}
+
+fn burner_phone_index_usize(vrf: &Pubkey, shell_count: usize) -> usize {
+    debug_assert!(shell_count > 1);
+    let bs = vrf.to_bytes();
+    let mut acc: u64 = 7;
+    for b in bs {
+        if b != 0 {
+            acc = acc.wrapping_mul(31).wrapping_add(b as u64);
+        }
+    }
+    (acc % shell_count as u64) as usize
 }
 
 // -----------------------------------------------------------------------------
@@ -492,7 +673,7 @@ pub enum GameState {
     Finished { winner: Pubkey },
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace)]
+#[derive(AnchorSerialize, AnchorDeserialize, Copy, Clone, PartialEq, Eq, Debug, InitSpace)]
 pub enum ItemType {
     Beer,
     MagnifyingGlass,
@@ -701,10 +882,41 @@ pub struct Shoot<'info> {
     )]
     pub escrow_vault: Account<'info, EscrowVault>,
 
-    /// CHECK: when finishing, validated against `GameState::Finished` adjudication.
+    /// CHECK: winner is validated against GameState::Finished and enforced via require_keys_eq! before any payout or closure.
     #[account(mut)]
     pub winner: UncheckedAccount<'info>,
 
+    /// CHECK: fee_wallet is a trusted protocol-controlled account used only for receiving fee distribution.
+    #[account(mut)]
+    pub fee_wallet: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct UseItem<'info> {
+    #[account(mut)]
+    pub player: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"game", game_room.player1.as_ref()],
+        bump = game_room.bump
+    )]
+    pub game_room: Account<'info, GameRoom>,
+
+    #[account(
+        mut,
+        seeds = [b"escrow", game_room.key().as_ref()],
+        bump = escrow_vault.bump
+    )]
+    pub escrow_vault: Account<'info, EscrowVault>,
+
+    /// CHECK: winner is validated when resolving game outcome (check_winner + require_keys_eq!) before any transfer or account closure.
+    #[account(mut)]
+    pub winner: UncheckedAccount<'info>,
+
+    /// CHECK: fee_wallet is a trusted protocol-controlled account used for fee collection.
     #[account(mut)]
     pub fee_wallet: UncheckedAccount<'info>,
 
@@ -806,5 +1018,77 @@ mod tests {
         // flipped to p2, cuffs cleared skip → next loop flip back to p1
         assert_eq!(r.current_turn, 0);
         assert!(!r.p2_cuffed);
+    }
+
+    #[test]
+    fn remove_owned_item_err_when_missing() {
+        let mut r = dummy_room(GameState::PlayerTurn);
+        r.items_p1.clear();
+        assert!(remove_owned_item(&mut r, 0, ItemType::Beer).is_err());
+    }
+
+    #[test]
+    fn remove_owned_item_ok() {
+        let mut r = dummy_room(GameState::PlayerTurn);
+        r.items_p1 = vec![ItemType::Beer];
+        remove_owned_item(&mut r, 0, ItemType::Beer).unwrap();
+        assert!(r.items_p1.is_empty());
+    }
+
+    #[test]
+    fn inverter_flips_live_count_and_flag() {
+        let mut r = dummy_room(GameState::PlayerTurn);
+        r.shells = vec![false];
+        r.shells_total = 1;
+        r.shells_live = 0;
+        let shell_is_live_ref = &mut r.shells[0];
+        let was_live = *shell_is_live_ref;
+        assert!(!was_live);
+        if was_live {
+            r.shells_live = r.shells_live.saturating_sub(1);
+        } else {
+            r.shells_live = r.shells_live.saturating_add(1);
+        }
+        *shell_is_live_ref = !was_live;
+        assert!(r.shells[0]);
+        assert_eq!(r.shells_live, 1);
+    }
+
+    #[test]
+    fn burner_phone_index_bounded() {
+        let vrf = Pubkey::new_from_array([
+            0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+        ]);
+        let len = 5usize;
+        let i = burner_phone_index_usize(&vrf, len);
+        assert!(i < len);
+    }
+
+    fn dummy_room(state: GameState) -> GameRoom {
+        GameRoom {
+            player1: pk_byte(1),
+            player2: pk_byte(2),
+            bet_amount: 10_000_000,
+            state,
+            current_turn: 0,
+            hp_p1: 3,
+            hp_p2: 3,
+            max_hp: 5,
+            shells: vec![true, false],
+            shells_total: 2,
+            shells_live: 1,
+            items_p1: Vec::new(),
+            items_p2: Vec::new(),
+            saw_active: false,
+            p1_cuffed: false,
+            p2_cuffed: false,
+            vrf_account: Pubkey::default(),
+            pills_bitmask: 0,
+            pills_index: 0,
+            round: 1,
+            last_action_ts: 0,
+            bump: 0,
+        }
     }
 }

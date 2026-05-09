@@ -1,2 +1,5 @@
 /target
 .env
+/anchor/target
+/anchor/programs/buckshot/target
+*.log
