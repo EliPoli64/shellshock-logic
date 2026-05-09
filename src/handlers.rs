@@ -58,7 +58,7 @@ pub async fn execute_action(
                 states.insert(match_id.clone(), game_state.clone());
             }
 
-            // 5. Persist move to database
+            // 5. Persist move to database (fire-and-forget)
             let match_uuid = match Uuid::parse_str(&match_id) {
                 Ok(uuid) => uuid,
                 Err(_) => Uuid::new_v4(),
@@ -74,8 +74,11 @@ pub async fn execute_action(
                 created_at: Utc::now(),
             };
 
-            let collection = state.db.collection::<MoveHistory>("moves");
-            let _ = collection.insert_one(move_history, None).await;
+            let db = state.db.clone();
+            tokio::spawn(async move {
+                let collection = db.collection::<MoveHistory>("moves");
+                let _ = collection.insert_one(move_history, None).await;
+            });
 
             // 6. Build MoveResponse from updated game state
             let player_state = game_state.players.iter()

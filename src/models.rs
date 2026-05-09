@@ -27,11 +27,18 @@ pub enum GameAction {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum ItemType {
+    #[serde(rename = "beer")]
     Beer,
+    #[serde(rename = "cigarettes")]
     Cigarette,
+    #[serde(rename = "handcuffs")]
     Handcuffs,
+    #[serde(rename = "magnifyingGlass")]
     Magnifier,
+    #[serde(rename = "saw")]
     Saw,
+    #[serde(rename = "pill")]
+    Pill,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -108,7 +115,7 @@ impl ItemCounts {
             handcuffs: count(&ItemType::Handcuffs),
             cigarettes: count(&ItemType::Cigarette),
             saw: count(&ItemType::Saw),
-            pill: 0,
+            pill: count(&ItemType::Pill),
         }
     }
 }
