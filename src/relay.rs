@@ -8,8 +8,8 @@ use tokio::sync::RwLock;
 use std::collections::HashMap;
 
 pub struct RelayService {
-    relay_url: String,
-    states: Arc<RwLock<HashMap<String, GameState>>>,
+    pub relay_url: String,
+    pub states: Arc<RwLock<HashMap<String, GameState>>>,
 }
 
 impl RelayService {

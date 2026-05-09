@@ -1,6 +1,5 @@
 mod models;
 mod handlers;
-mod pve_handlers;
 mod solana;
 mod logic;
 mod relay;
@@ -69,9 +68,8 @@ async fn main() {
     // Build our application with a route
     let app = Router::new()
         .route("/health", get(handlers::health_check))
-        .route("/match/pve/start", post(pve_handlers::start_pve_match))
-        .route("/match/pve/:match_id/action", post(pve_handlers::execute_pve_action))
-        .route("/match/pve/:match_id/dealer-turn", post(pve_handlers::execute_pve_dealer_turn))
+        .route("/match/pve/start", post(handlers::start_pve))
+        .route("/match/:match_id/dealer-turn", post(handlers::dealer_turn))
         .route("/match/:match_id/action", post(handlers::execute_action))
         .route("/player/:wallet/history", get(handlers::get_player_history))
         .route("/match/:match_id/details", get(handlers::get_match_details))

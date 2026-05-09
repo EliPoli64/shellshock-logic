@@ -57,7 +57,8 @@ impl GameLogic {
         // In a real implementation, this would handle the full shotgun logic
         match action {
             GameAction::ShootDealer => {
-                let shell = state.chamber.pop().ok_or_else(|| anyhow!("No shells"))?;
+                if state.chamber.is_empty() { return Err(anyhow!("No shells")); }
+                let shell = state.chamber.remove(0);
                 if shell == ShellType::Live {
                     // Find dealer (other player) and reduce health
                     let dealer_wallet = state.players.iter()
@@ -86,7 +87,8 @@ impl GameLogic {
                 }
             }
             GameAction::ShootSelf => {
-                let shell = state.chamber.pop().ok_or_else(|| anyhow!("No shells"))?;
+                if state.chamber.is_empty() { return Err(anyhow!("No shells")); }
+                let shell = state.chamber.remove(0);
                 if shell == ShellType::Live {
                     let current_player_wallet = state.turn_wallet.clone();
                     for player in &mut state.players {
@@ -121,7 +123,7 @@ impl GameLogic {
                 
                 match item {
                     ItemType::Beer => {
-                        state.chamber.pop();
+                        if !state.chamber.is_empty() { state.chamber.remove(0); }
                         Ok("Used beer - ejected shell".to_string())
                     }
                     ItemType::Cigarette => {
