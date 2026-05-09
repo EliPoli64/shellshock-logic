@@ -163,12 +163,19 @@ pub async fn execute_pve_action(
                     "beer" => {
                         if !pve_match.chamber.is_empty() {
                             let shell = pve_match.chamber.remove(0);
+                            let is_live = shell == ShellType::Live;
                             pve_match.state.shells_remaining -= 1;
-                            if shell == ShellType::Live {
+                            if is_live {
                                 pve_match.state.live_shells -= 1;
                             } else {
                                 pve_match.state.blank_shells -= 1;
                             }
+                            let ejected_type = if is_live { "live" } else { "blank" };
+                            action_result_json = Some(serde_json::json!({
+                                "type": "UseItem",
+                                "item": "beer",
+                                "ejected_shell": ejected_type,
+                            }));
                         }
                     }
                     "handcuffs" => {
@@ -225,6 +232,7 @@ pub async fn execute_pve_action(
         state_update: PvEStateUpdate {
             state: pve_match.state.clone(),
             game_status: pve_match.game_status.clone(),
+            is_saw_active: pve_match.is_saw_active,
             chamber_peek,
             last_action_result: action_result_json,
         }
@@ -258,6 +266,94 @@ pub async fn execute_pve_dealer_turn(
         pve_match.dealer_handcuffed = false;
         pve_match.state.is_player_turn = true;
     } else {
+        // --- Dealer AI: use items before shooting ---
+        let mut known_shell: Option<bool> = None; // Some(true) = live, Some(false) = blank
+        let max_items_per_turn = 3;
+        let mut items_used = 0;
+
+        // 1. Use cigarettes if damaged
+        let cig_count = pve_match.state.dealer_items.get("cigarettes").cloned().unwrap_or(0);
+        if cig_count > 0 && pve_match.state.dealer_health < 3 && items_used < max_items_per_turn {
+            *pve_match.state.dealer_items.get_mut("cigarettes").unwrap() -= 1;
+            pve_match.state.dealer_health = (pve_match.state.dealer_health + 1).min(5);
+            items_used += 1;
+            response_actions.push(PvEDealerAction {
+                r#type: "UseItem".to_string(),
+                item: Some("cigarettes".to_string()),
+                result: Some(format!("Dealer healed to {} HP", pve_match.state.dealer_health)),
+                is_live: None, damage: None,
+            });
+        }
+
+        // 2. Use magnifying glass to peek at next shell
+        let mag_count = pve_match.state.dealer_items.get("magnifyingGlass").cloned().unwrap_or(0);
+        if mag_count > 0 && !pve_match.chamber.is_empty() && items_used < max_items_per_turn {
+            *pve_match.state.dealer_items.get_mut("magnifyingGlass").unwrap() -= 1;
+            known_shell = Some(pve_match.chamber[0] == ShellType::Live);
+            items_used += 1;
+            response_actions.push(PvEDealerAction {
+                r#type: "UseItem".to_string(),
+                item: Some("magnifyingGlass".to_string()),
+                result: Some("Dealer peeked at the chamber".to_string()),
+                is_live: None, damage: None,
+            });
+        }
+
+        // 3. Use beer to eject a known blank shell
+        if known_shell == Some(false) && items_used < max_items_per_turn {
+            let beer_count = pve_match.state.dealer_items.get("beer").cloned().unwrap_or(0);
+            if beer_count > 0 && !pve_match.chamber.is_empty() {
+                *pve_match.state.dealer_items.get_mut("beer").unwrap() -= 1;
+                let ejected = pve_match.chamber.remove(0);
+                pve_match.state.shells_remaining -= 1;
+                if ejected == ShellType::Live {
+                    pve_match.state.live_shells -= 1;
+                } else {
+                    pve_match.state.blank_shells -= 1;
+                }
+                known_shell = None; // Reset knowledge after ejection
+                items_used += 1;
+                response_actions.push(PvEDealerAction {
+                    r#type: "UseItem".to_string(),
+                    item: Some("beer".to_string()),
+                    result: Some("Dealer ejected a shell".to_string()),
+                    is_live: None, damage: None,
+                });
+            }
+        }
+
+        // 4. Use saw if next shell is known live (or random chance)
+        if known_shell == Some(true) && !pve_match.is_saw_active && items_used < max_items_per_turn {
+            let saw_count = pve_match.state.dealer_items.get("saw").cloned().unwrap_or(0);
+            if saw_count > 0 {
+                *pve_match.state.dealer_items.get_mut("saw").unwrap() -= 1;
+                pve_match.is_saw_active = true;
+                items_used += 1;
+                response_actions.push(PvEDealerAction {
+                    r#type: "UseItem".to_string(),
+                    item: Some("saw".to_string()),
+                    result: Some("Dealer sawed the barrel".to_string()),
+                    is_live: None, damage: None,
+                });
+            }
+        }
+
+        // 5. Use handcuffs
+        let cuff_count = pve_match.state.dealer_items.get("handcuffs").cloned().unwrap_or(0);
+        if cuff_count > 0 && items_used < max_items_per_turn {
+            *pve_match.state.dealer_items.get_mut("handcuffs").unwrap() -= 1;
+            // Note: handcuffs on the player are tracked on the frontend side;
+            // the backend signals it via the action list.
+            items_used += 1;
+            response_actions.push(PvEDealerAction {
+                r#type: "UseItem".to_string(),
+                item: Some("handcuffs".to_string()),
+                result: Some("Dealer handcuffed the player".to_string()),
+                is_live: None, damage: None,
+            });
+        }
+
+        // --- Dealer shoots ---
         if !pve_match.chamber.is_empty() {
             let shell = pve_match.chamber.remove(0);
             let is_live = shell == ShellType::Live;
@@ -268,32 +364,43 @@ pub async fn execute_pve_dealer_turn(
                 pve_match.state.blank_shells -= 1;
             }
 
-            use rand::Rng;
-            let mut rng = rand::thread_rng();
-            let shoot_self = rng.r#gen::<f64>() < 0.3;
+            let damage = if pve_match.is_saw_active { 2 } else { 1 };
+
+            // Dealer decision: shoot self if known blank, shoot player if known live, otherwise random
+            let shoot_self = match known_shell {
+                Some(true) => false,   // Known live → shoot player
+                Some(false) => true,   // Known blank → shoot self (keep turn)
+                None => {
+                    // Random with slight bias toward shooting player
+                    use rand::Rng;
+                    let mut rng = rand::thread_rng();
+                    rng.r#gen::<f64>() < 0.3
+                }
+            };
 
             if shoot_self {
                 if is_live {
-                    pve_match.state.dealer_health = pve_match.state.dealer_health.saturating_sub(1);
+                    pve_match.state.dealer_health = pve_match.state.dealer_health.saturating_sub(damage);
                     pve_match.state.is_player_turn = true;
                 } else {
-                    // stays dealer turn, but since this endpoint only processes one shot per call,
-                    // the frontend will need to loop if it's still dealer turn
+                    // Blank on self → dealer keeps turn (frontend will loop)
                 }
                 response_actions.push(PvEDealerAction {
                     r#type: "ShootSelf".to_string(),
-                    item: None, result: None, is_live: Some(is_live), damage: None
+                    item: None, result: None, is_live: Some(is_live), damage: Some(damage),
                 });
             } else {
                 if is_live {
-                    pve_match.state.player_health = pve_match.state.player_health.saturating_sub(1);
+                    pve_match.state.player_health = pve_match.state.player_health.saturating_sub(damage);
                 }
                 pve_match.state.is_player_turn = true;
                 response_actions.push(PvEDealerAction {
                     r#type: "ShootPlayer".to_string(),
-                    item: None, result: None, is_live: Some(is_live), damage: None
+                    item: None, result: None, is_live: Some(is_live), damage: Some(damage),
                 });
             }
+
+            pve_match.is_saw_active = false;
 
             if pve_match.state.dealer_health == 0 {
                 pve_match.game_status = "round_end".to_string();
@@ -324,6 +431,7 @@ pub async fn execute_pve_dealer_turn(
         state_update: PvEStateUpdate {
             state: pve_match.state.clone(),
             game_status: pve_match.game_status.clone(),
+            is_saw_active: pve_match.is_saw_active,
             chamber_peek: None,
             last_action_result: None,
         }

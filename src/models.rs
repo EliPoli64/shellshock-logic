@@ -123,6 +123,7 @@ pub struct PvEStateUpdate {
     #[serde(flatten)]
     pub state: PvEStateFlat,
     pub game_status: String,
+    pub is_saw_active: bool,
     pub chamber_peek: Option<String>,
     pub last_action_result: Option<serde_json::Value>,
 }
