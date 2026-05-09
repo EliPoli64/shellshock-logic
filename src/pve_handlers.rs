@@ -275,7 +275,7 @@ pub async fn execute_pve_dealer_turn(
         let cig_count = pve_match.state.dealer_items.get("cigarettes").cloned().unwrap_or(0);
         if cig_count > 0 && pve_match.state.dealer_health < 3 && items_used < max_items_per_turn {
             *pve_match.state.dealer_items.get_mut("cigarettes").unwrap() -= 1;
-            pve_match.state.dealer_health = (pve_match.state.dealer_health + 1).min(5);
+            pve_match.state.dealer_health = (pve_match.state.dealer_health + 1).min(3);
             items_used += 1;
             response_actions.push(PvEDealerAction {
                 r#type: "UseItem".to_string(),
