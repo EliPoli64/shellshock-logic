@@ -8,7 +8,10 @@
 
 > [!NOTE]
 > This repository is the **Smart Contract (Backend)** part of the Shellshock ecosystem. For the frontend implementation, please refer to the [Shellshock Frontend Repository](https://github.com/EliPoli64/shellshock-ui).
+
+>  The frontend currently runs a simulated game loop for demo purposes. Full on-chain transaction integration is planned as the next development milestone.
 ---
+
 
 ## 🎮 Project Overview
 
