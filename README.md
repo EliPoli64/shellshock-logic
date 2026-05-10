@@ -7,8 +7,7 @@
 **Shellshock Roulette On-Chain** is a tactical, high-stakes Russian roulette-inspired PvE game built entirely on the Solana blockchain. This repository contains the core **on-chain backend logic**, including the smart contract infrastructure, state management, and game mechanics that power the Shellshock experience.
 
 > [!NOTE]
-> This repository is the **Smart Contract (Backend)** part of the Shellshock ecosystem. For the frontend implementation (React/TypeScript), please refer to the [Shellshock Frontend Repository]([LIVE_DEMO_LINK]).
-
+> This repository is the **Smart Contract (Backend)** part of the Shellshock ecosystem. For the frontend implementation (React/TypeScript), please refer to the [Shellshock Frontend Repository](https://github.com/EliPoli64/shellshock-ui).
 ---
 
 ## 🎮 Project Overview
@@ -180,26 +179,15 @@ async function startNewGame(betAmountSOL: number) {
 - [ ] **PvP Support**: Real-time matchmaking for Player vs. Player matches.
 - [ ] **Matchmaking Queue**: On-chain lobby system for competitive play.
 - [ ] **Ranking System**: Global leaderboard and ELO-based ranking.
-- [ ] **NFT Cosmetics**: Use Solana NFTs to customize player skins and items.
+- [ ] **NFT Cosmetics**: Use Solana NFTs to customize player items.
 - [ ] **Tournaments**: Scheduled on-chain tournaments with pooled prizes.
-
----
-
-## ✅ Hackathon Submission Checklist
-
-- [x] Program deployed to Devnet.
-- [x] Core PvE loop functional on-chain.
-- [x] All 8 tactical items implemented.
-- [x] Secure escrow and payout logic verified.
-- [x] Technical documentation (ENDPOINTS.md) completed.
-- [x] Frontend integration guide (FRONTEND_PROMPT.md) provided.
 
 ---
 
 ## 🎥 Demos
 
-- **Live Demo**: [LIVE_DEMO_LINK]
-- **Demo Video**: [VIDEO_LINK]
+- **Live Demo**: https://shellshock-uidfbdfb-3gxomji3f-tec-quinox-s-projects.vercel.app/
+- **Demo Video**: https://youtu.be/JP-Je-qzT-U
 
 ---
 
