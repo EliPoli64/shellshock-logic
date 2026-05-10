@@ -2,6 +2,8 @@
 
 declare_id!("FVi3CE8X75fAZ5x1MPnwJ2UikDUe6go4unT7iQiCxzok");
 
+pub const FEE_WALLET: &str = "7m6C1hGvG5...placeholder..."; // Replace with real team pubkey
+
 #[program]
 pub mod shellshock {
     use super::*;
@@ -16,7 +18,7 @@ pub mod shellshock {
             10_000_000 <= bet_amount && bet_amount <= 10_000_000_000,
             ErrorCode::InvalidBetAmount
         );
-
+        
         // CPI transfer from player to escrow_vault
         anchor_lang::system_program::transfer(
             CpiContext::new(
@@ -76,7 +78,7 @@ pub mod shellshock {
         require!(game_room.round == 1, ErrorCode::GameAlreadyStarted);
 
         let game_key = game_room.key();
-        let seeds = &[b"escrow", game_key.as_ref(), &[ctx.bumps.escrow_vault]];
+        let seeds = &[b"escrow", game_key.as_ref(), &[ctx.bumps.escrow_vault]]; 
         let signer = &[&seeds[..]];
 
         let vault_lamports = ctx.accounts.escrow_vault.lamports();
@@ -108,7 +110,7 @@ pub mod shellshock {
         );
 
         let game_key = game_room.key();
-        let seeds = &[b"escrow", game_key.as_ref(), &[ctx.bumps.escrow_vault]];
+        let seeds = &[b"escrow", game_key.as_ref(), &[ctx.bumps.escrow_vault]]; 
         let signer = &[&seeds[..]];
 
         let vault_lamports = ctx.accounts.escrow_vault.lamports();
@@ -134,6 +136,273 @@ pub mod shellshock {
             payout: vault_lamports
         });
 
+        Ok(())
+    }
+
+    pub fn shoot(ctx: Context<Shoot>, target: Target) -> Result<()> {
+        let game_key = ctx.accounts.game_room.key();
+        let game = &mut ctx.accounts.game_room;
+        
+        // RULE 1: Validations
+        require!(game.current_turn == 0, ErrorCode::NotYourTurn);
+        require!(matches!(game.state, GameState::PlayerTurn), ErrorCode::GameNotActive);
+        require!(!game.shells.is_empty(), ErrorCode::GameNotActive);
+
+        // RULE 2: Read and consume the shell
+        let shell = game.shells.remove(0);
+        game.shells_total -= 1;
+        if shell {
+            game.shells_live -= 1;
+        }
+
+        // RULE 3: Calculate damage and consume saw
+        let dmg: u8 = if game.saw_active { 2 } else { 1 };
+        game.saw_active = false;
+
+        // RULE 4: Apply effects
+        let change_turn = match (&target, shell) {
+            (Target::Self_, false) => false,
+            (Target::Self_, true) => {
+                apply_dmg(game, 0, dmg);
+                true
+            }
+            (Target::Opponent, _) => {
+                if shell {
+                    apply_dmg(game, 1, dmg);
+                }
+                true
+            }
+        };
+
+        if change_turn {
+            game.advance_turn();
+        }
+
+        // RULE 5: Update timestamp
+        game.last_action_ts = Clock::get()?.unix_timestamp;
+
+        // RULE 7: Emit event
+        emit!(ShellFired {
+            shooter: 0,
+            target: if matches!(target, Target::Opponent) { 1 } else { 0 },
+            was_live: shell,
+            dmg: if shell { dmg } else { 0 },
+        });
+        if change_turn {
+            emit!(TurnChanged { new_turn: game.current_turn });
+        }
+
+        // RULE 6: Check game end or reload
+        if game.hp_player == 0 {
+            resolve_game(
+                game,
+                game_key,
+                &ctx.accounts.escrow_vault.to_account_info(),
+                1,
+                &ctx.accounts.fee_wallet.to_account_info(),
+                &ctx.accounts.player.to_account_info(),
+                &ctx.accounts.system_program,
+                ctx.bumps.escrow_vault,
+            )?;
+        } else if game.hp_dealer == 0 {
+            resolve_game(
+                game,
+                game_key,
+                &ctx.accounts.escrow_vault.to_account_info(),
+                0,
+                &ctx.accounts.fee_wallet.to_account_info(),
+                &ctx.accounts.player.to_account_info(),
+                &ctx.accounts.system_program,
+                ctx.bumps.escrow_vault,
+            )?;
+        } else if game.shells_total == 0 {
+            game.round += 1;
+            generate_shells(game)?;
+            emit!(RoundReloaded {
+                round: game.round,
+                total_shells: game.shells_total,
+                live_count: game.shells_live,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub fn execute_dealer_turn(ctx: Context<ExecuteDealerTurn>) -> Result<()> {
+        let game_key = ctx.accounts.game_room.key();
+        let game = &mut ctx.accounts.game_room;
+        
+        require!(game.current_turn == 1, ErrorCode::NotYourTurn);
+        require!(matches!(game.state, GameState::PlayerTurn), ErrorCode::GameNotActive);
+
+        let action = game.dealer_decide_action();
+        let mut used_item: Option<ItemType> = None;
+
+        match action {
+            DealerActionType::Shoot => {
+                let shell = game.shells.remove(0);
+                game.shells_total -= 1;
+                if shell {
+                    game.shells_live -= 1;
+                }
+
+                let dmg: u8 = if game.saw_active { 2 } else { 1 };
+                game.saw_active = false;
+
+                // Dealer always shoots player (opponent)
+                let target = Target::Opponent; 
+                
+                let (applied_target, change_turn) = match (&target, shell) {    
+                    (Target::Self_, false) => (Target::Self_, false),
+                    (Target::Self_, true) => {
+                        apply_dmg(game, 1, dmg);
+                        (Target::Self_, true)
+                    }
+                    (Target::Opponent, _) => {
+                        if shell {
+                            apply_dmg(game, 0, dmg);
+                        }
+                        (Target::Opponent, true)
+                    }
+                };
+
+                if change_turn {
+                    game.advance_turn();
+                }
+
+                emit!(ShellFired {
+                    shooter: 1,
+                    target: if matches!(applied_target, Target::Opponent) { 0 } else { 1 },
+                    was_live: shell,
+                    dmg: if shell { dmg } else { 0 },
+                });
+                
+                if change_turn {
+                    emit!(TurnChanged { new_turn: game.current_turn });
+                }
+
+                // Check game end or reload
+                if game.hp_player == 0 {
+                    resolve_game(
+                        game,
+                        game_key,
+                        &ctx.accounts.escrow_vault.to_account_info(),
+                        1,
+                        &ctx.accounts.fee_wallet.to_account_info(),
+                        &ctx.accounts.player.to_account_info(),
+                        &ctx.accounts.system_program,
+                        ctx.bumps.escrow_vault,
+                    )?;
+                } else if game.hp_dealer == 0 {
+                    resolve_game(
+                        game,
+                        game_key,
+                        &ctx.accounts.escrow_vault.to_account_info(),
+                        0,
+                        &ctx.accounts.fee_wallet.to_account_info(),
+                        &ctx.accounts.player.to_account_info(),
+                        &ctx.accounts.system_program,
+                        ctx.bumps.escrow_vault,
+                    )?;
+                } else if game.shells_total == 0 {
+                    game.round += 1;
+                    generate_shells(game)?;
+                    emit!(RoundReloaded {
+                        round: game.round,
+                        total_shells: game.shells_total,
+                        live_count: game.shells_live,
+                    });
+                }
+            }
+            DealerActionType::UsedBeer => {
+                if !game.shells.is_empty() {
+                    let shell = game.shells.remove(0);
+                    game.shells_total -= 1;
+                    if shell {
+                        game.shells_live -= 1;
+                    }
+                    used_item = Some(ItemType::Beer);
+                    emit!(DealerAction { action: DealerActionType::UsedBeer, result: shell });
+                }
+            }
+            DealerActionType::UsedCigarettes => {
+                game.hp_dealer = (game.hp_dealer + 1).min(game.max_hp);
+                used_item = Some(ItemType::Cigarettes);
+                emit!(DealerAction { action: DealerActionType::UsedCigarettes, result: true });
+            }
+            DealerActionType::UsedSaw => {
+                game.saw_active = true;
+                used_item = Some(ItemType::HandSaw);
+                emit!(DealerAction { action: DealerActionType::UsedSaw, result: true });
+            }
+            DealerActionType::UsedHandcuffs => {
+                game.player_cuffed = true;
+                used_item = Some(ItemType::Handcuffs);
+                emit!(DealerAction { action: DealerActionType::UsedHandcuffs, result: true });
+            }
+            DealerActionType::UsedMagnifyingGlass => {
+                if !game.shells.is_empty() {
+                    let is_live = game.shells[0];
+                    used_item = Some(ItemType::MagnifyingGlass);
+                    emit!(DealerAction { action: DealerActionType::UsedMagnifyingGlass, result: is_live });
+                }
+            }
+            DealerActionType::UsedPills => {
+                let is_good = (game.pills_bitmask >> game.pills_index) & 1 == 1;
+                game.pills_index = (game.pills_index + 1) % 8;
+                if is_good {
+                    game.hp_dealer = (game.hp_dealer + 2).min(game.max_hp);  
+                } else {
+                    game.hp_dealer = game.hp_dealer.saturating_sub(1);       
+                }
+                used_item = Some(ItemType::Pills);
+                emit!(DealerAction { action: DealerActionType::UsedPills, result: is_good });
+                
+                if game.hp_dealer == 0 {
+                    resolve_game(
+                        game,
+                        game_key,
+                        &ctx.accounts.escrow_vault.to_account_info(),
+                        0,
+                        &ctx.accounts.fee_wallet.to_account_info(),
+                        &ctx.accounts.player.to_account_info(),
+                        &ctx.accounts.system_program,
+                        ctx.bumps.escrow_vault,
+                    )?;
+                }
+            }
+            DealerActionType::UsedInverter => {
+                if !game.shells.is_empty() {
+                    let old_shell = game.shells[0];
+                    game.shells[0] = !old_shell;
+                    if old_shell {
+                        game.shells_live -= 1;
+                    } else {
+                        game.shells_live += 1;
+                    }
+                    used_item = Some(ItemType::Inverter);
+                    emit!(DealerAction { action: DealerActionType::UsedInverter, result: true });
+                }
+            }
+            _ => {
+                let shell = game.shells.remove(0);
+                game.shells_total -= 1;
+                if shell { game.shells_live -= 1; }
+                game.saw_active = false;
+                game.advance_turn();
+                emit!(ShellFired { shooter: 1, target: 0, was_live: shell, dmg: if shell { 1 } else { 0 } });
+                emit!(TurnChanged { new_turn: game.current_turn });
+            }
+        }
+
+        if let Some(item) = used_item {
+            if let Some(pos) = game.items_dealer.iter().position(|&i| i == item) {
+                game.items_dealer.remove(pos);
+            }
+            emit!(ItemUsed { player: 1, item });
+        }
+
+        game.last_action_ts = Clock::get()?.unix_timestamp;
         Ok(())
     }
 }
@@ -213,6 +482,60 @@ pub struct ClaimTimeout<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(Accounts)]
+pub struct Shoot<'info> {
+    #[account(mut)]
+    pub player: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"game", player.key().as_ref()],
+        has_one = player,
+        bump = game_room.bump
+    )]
+    pub game_room: Account<'info, GameRoom>,
+
+    #[account(
+        mut,
+        seeds = [b"escrow", game_room.key().as_ref()],
+        bump
+    )]
+    pub escrow_vault: SystemAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: Hardcoded fee wallet for hackathon
+    pub fee_wallet: SystemAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct ExecuteDealerTurn<'info> {
+    #[account(mut)]
+    pub player: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"game", player.key().as_ref()],
+        has_one = player,
+        bump = game_room.bump
+    )]
+    pub game_room: Account<'info, GameRoom>,
+
+    #[account(
+        mut,
+        seeds = [b"escrow", game_room.key().as_ref()],
+        bump
+    )]
+    pub escrow_vault: SystemAccount<'info>,
+
+    #[account(mut)]
+    /// CHECK: Hardcoded fee wallet for hackathon
+    pub fee_wallet: SystemAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
 #[account]
 pub struct GameRoom {
     pub player: Pubkey,
@@ -245,7 +568,7 @@ pub enum GameState {
     Finished { winner: u8 }, // 0=player, 1=dealer
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]       
 pub enum ItemType {
     Beer,
     MagnifyingGlass,
@@ -257,13 +580,13 @@ pub enum ItemType {
     BurnerPhone,
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]       
 pub enum Target {
     Self_,
     Opponent,
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]       
 pub enum DealerActionType {
     Shoot,
     UsedBeer,
@@ -381,7 +704,7 @@ impl GameRoom {
         }
     }
 
-    pub fn get_items_mut(&mut self, turn: u8) -> &mut Vec<ItemType> {
+    pub fn get_items_mut(&mut self, turn: u8) -> &mut Vec<ItemType> {        
         if turn == 0 {
             &mut self.items_player
         } else {
@@ -461,6 +784,82 @@ impl GameRoom {
         // 8. DEFAULT
         DealerActionType::Shoot
     }
+}
+
+fn apply_dmg(game: &mut GameRoom, player: u8, dmg: u8) {
+    if player == 0 {
+        game.hp_player = game.hp_player.saturating_sub(dmg);
+    } else {
+        game.hp_dealer = game.hp_dealer.saturating_sub(dmg);
+    }
+}
+
+fn resolve_game<'info>(
+    game: &mut GameRoom,
+    game_key: Pubkey,
+    vault: &AccountInfo<'info>,
+    winner: u8,
+    fee_wallet: &AccountInfo<'info>,
+    player: &AccountInfo<'info>,
+    system_program: &Program<'info, System>,
+    escrow_bump: u8,
+) -> Result<()> {
+    let vault_lamports = vault.lamports();
+    let payout = vault_lamports * 95 / 100;
+    let fee = vault_lamports.saturating_sub(payout);
+
+    let seeds = &[b"escrow", game_key.as_ref(), &[escrow_bump]];
+    let signer = &[&seeds[..]];
+
+    if winner == 0 {
+        // Player wins: 95% to player, 5% to fee wallet
+        anchor_lang::solana_program::program::invoke_signed(
+            &anchor_lang::solana_program::system_instruction::transfer(      
+                &vault.key(),
+                &player.key(),
+                payout,
+            ),
+            &[
+                vault.to_account_info(),
+                player.to_account_info(),
+                system_program.to_account_info(),
+            ],
+            signer,
+        )?;
+
+        anchor_lang::solana_program::program::invoke_signed(
+            &anchor_lang::solana_program::system_instruction::transfer(      
+                &vault.key(),
+                &fee_wallet.key(),
+                fee,
+            ),
+            &[
+                vault.to_account_info(),
+                fee_wallet.to_account_info(),
+                system_program.to_account_info(),
+            ],
+            signer,
+        )?;
+    } else {
+        // Dealer wins: all to fee wallet
+        anchor_lang::solana_program::program::invoke_signed(
+            &anchor_lang::solana_program::system_instruction::transfer(      
+                &vault.key(),
+                &fee_wallet.key(),
+                vault_lamports,
+            ),
+            &[
+                vault.to_account_info(),
+                fee_wallet.to_account_info(),
+                system_program.to_account_info(),
+            ],
+            signer,
+        )?;
+    }
+
+    game.state = GameState::Finished { winner };
+    emit!(GameFinished { winner, payout: if winner == 0 { payout } else { 0 } });
+    Ok(())
 }
 
 fn generate_shells(game: &mut GameRoom) -> Result<()> {
