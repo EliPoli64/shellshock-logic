@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "skills": {
+    "pinocchio-development": {
+      "source": "sendaifun/skills",
+      "sourceType": "github",
+      "skillPath": "skills/pinocchio-development/SKILL.md",
+      "computedHash": "1f4be856ae79aff085b4cdf8100afea6dad8c2f6644ac573a1359256f85ff9c4"
+    },
+    "solana-kit": {
+      "source": "sendaifun/skills",
+      "sourceType": "github",
+      "skillPath": "skills/solana-kit/SKILL.md",
+      "computedHash": "1c1a4b47d5a3a6717cd67dbe07db8ea5299e4510f262d672eec7782f21f5deaf"
+    },
+    "svm": {
+      "source": "sendaifun/skills",
+      "sourceType": "github",
+      "skillPath": "skills/svm/SKILL.md",
+      "computedHash": "200f04f335cbfd80524e0f2fb12e8c13b0b6bfa9f70b943256d0a52e16731338"
+    },
+    "switchboard": {
+      "source": "sendaifun/skills",
+      "sourceType": "github",
+      "skillPath": "skills/switchboard/SKILL.md",
+      "computedHash": "11c369d22137a6542e7116a698c53cbbc5e2a3f459e87ebf1531d148951f0d75"
+    }
+  }
+}
