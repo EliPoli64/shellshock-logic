@@ -7,7 +7,7 @@
 **Shellshock Roulette On-Chain** is a tactical, high-stakes Russian roulette-inspired PvE game built entirely on the Solana blockchain. This repository contains the core **on-chain backend logic**, including the smart contract infrastructure, state management, and game mechanics that power the Shellshock experience.
 
 > [!NOTE]
-> This repository is the **Smart Contract (Backend)** part of the Shellshock ecosystem. For the frontend implementation (React/TypeScript), please refer to the [Shellshock Frontend Repository](https://github.com/EliPoli64/shellshock-ui).
+> This repository is the **Smart Contract (Backend)** part of the Shellshock ecosystem. For the frontend implementation, please refer to the [Shellshock Frontend Repository](https://github.com/EliPoli64/shellshock-ui).
 ---
 
 ## 🎮 Project Overview
@@ -55,7 +55,7 @@ The game operates through a state-machine implemented in Rust. Every action is a
 | **Program ID** | `FVi3CE8X75fAZ5x1MPnwJ2UikDUe6go4unT7iQiCxzok` |
 | **Network** | Solana Devnet |
 | **Explorer** | [View on Solana Explorer](https://explorer.solana.com/address/FVi3CE8X75fAZ5x1MPnwJ2UikDUe6go4unT7iQiCxzok?cluster=devnet) |
-| **Deployment Tx** | `[DEPLOYMENT_TRANSACTION_ID]` |
+
 
 ---
 
@@ -179,8 +179,6 @@ async function startNewGame(betAmountSOL: number) {
 - [ ] **PvP Support**: Real-time matchmaking for Player vs. Player matches.
 - [ ] **Matchmaking Queue**: On-chain lobby system for competitive play.
 - [ ] **Ranking System**: Global leaderboard and ELO-based ranking.
-- [ ] **NFT Cosmetics**: Use Solana NFTs to customize player items.
-- [ ] **Tournaments**: Scheduled on-chain tournaments with pooled prizes.
 
 ---
 
