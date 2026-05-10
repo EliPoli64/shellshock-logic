@@ -1,8 +1,10 @@
-﻿use anchor_lang::prelude::*;
+use anchor_lang::prelude::*;
+use solana_program::pubkey;
 
 declare_id!("FVi3CE8X75fAZ5x1MPnwJ2UikDUe6go4unT7iQiCxzok");
 
-pub const FEE_WALLET: &str = "7m6C1hGvG5...placeholder..."; // Replace with real team pubkey
+// Replace with your team's actual devnet pubkey
+pub const FEE_WALLET_PUBKEY: Pubkey = pubkey!("7m6C1hGvG5...placeholder..."); 
 
 #[program]
 pub mod shellshock {
@@ -18,8 +20,7 @@ pub mod shellshock {
             10_000_000 <= bet_amount && bet_amount <= 10_000_000_000,
             ErrorCode::InvalidBetAmount
         );
-        
-        // CPI transfer from player to escrow_vault
+
         anchor_lang::system_program::transfer(
             CpiContext::new(
                 ctx.accounts.system_program.to_account_info(),
@@ -143,23 +144,22 @@ pub mod shellshock {
         let game_key = ctx.accounts.game_room.key();
         let game = &mut ctx.accounts.game_room;
         
-        // RULE 1: Validations
+        // RULE 1: Basic validation`n        
         require!(game.current_turn == 0, ErrorCode::NotYourTurn);
         require!(matches!(game.state, GameState::PlayerTurn), ErrorCode::GameNotActive);
         require!(!game.shells.is_empty(), ErrorCode::GameNotActive);
 
-        // RULE 2: Read and consume the shell
+        // RULE 2: Consume shell`n        
         let shell = game.shells.remove(0);
         game.shells_total -= 1;
         if shell {
             game.shells_live -= 1;
         }
 
-        // RULE 3: Calculate damage and consume saw
+        // RULE 3: Item Modifiers (Saw)`n        
         let dmg: u8 = if game.saw_active { 2 } else { 1 };
         game.saw_active = false;
 
-        // RULE 4: Apply effects
         let change_turn = match (&target, shell) {
             (Target::Self_, false) => false,
             (Target::Self_, true) => {
@@ -178,10 +178,8 @@ pub mod shellshock {
             game.advance_turn();
         }
 
-        // RULE 5: Update timestamp
         game.last_action_ts = Clock::get()?.unix_timestamp;
 
-        // RULE 7: Emit event
         emit!(ShellFired {
             shooter: 0,
             target: if matches!(target, Target::Opponent) { 1 } else { 0 },
@@ -192,7 +190,7 @@ pub mod shellshock {
             emit!(TurnChanged { new_turn: game.current_turn });
         }
 
-        // RULE 6: Check game end or reload
+        // RULE 6: Game Over Check`n        
         if game.hp_player == 0 {
             resolve_game(
                 game,
@@ -216,6 +214,7 @@ pub mod shellshock {
                 ctx.bumps.escrow_vault,
             )?;
         } else if game.shells_total == 0 {
+            // RULE 7: Reload Mechanics`n            
             game.round += 1;
             generate_shells(game)?;
             emit!(RoundReloaded {
@@ -240,19 +239,21 @@ pub mod shellshock {
 
         match action {
             DealerActionType::Shoot => {
+                // RULE 2: Consume shell`n        
                 let shell = game.shells.remove(0);
                 game.shells_total -= 1;
                 if shell {
                     game.shells_live -= 1;
                 }
 
+                // RULE 3: Item Modifiers (Saw)`n        
                 let dmg: u8 = if game.saw_active { 2 } else { 1 };
                 game.saw_active = false;
 
-                // Dealer always shoots player (opponent)
                 let target = Target::Opponent; 
                 
-                let (applied_target, change_turn) = match (&target, shell) {    
+                // RULE 4: Self-Shoot Mechanics (Self + Blank = Keep Turn)`n        
+                let (applied_target, change_turn) = match (&target, shell) {
                     (Target::Self_, false) => (Target::Self_, false),
                     (Target::Self_, true) => {
                         apply_dmg(game, 1, dmg);
@@ -281,7 +282,7 @@ pub mod shellshock {
                     emit!(TurnChanged { new_turn: game.current_turn });
                 }
 
-                // Check game end or reload
+                // RULE 6: Game Over Check`n        
                 if game.hp_player == 0 {
                     resolve_game(
                         game,
@@ -305,6 +306,7 @@ pub mod shellshock {
                         ctx.bumps.escrow_vault,
                     )?;
                 } else if game.shells_total == 0 {
+                    // RULE 7: Reload Mechanics`n            
                     game.round += 1;
                     generate_shells(game)?;
                     emit!(RoundReloaded {
@@ -316,6 +318,7 @@ pub mod shellshock {
             }
             DealerActionType::UsedBeer => {
                 if !game.shells.is_empty() {
+                    // RULE 2: Consume shell`n        
                     let shell = game.shells.remove(0);
                     game.shells_total -= 1;
                     if shell {
@@ -351,9 +354,9 @@ pub mod shellshock {
                 let is_good = (game.pills_bitmask >> game.pills_index) & 1 == 1;
                 game.pills_index = (game.pills_index + 1) % 8;
                 if is_good {
-                    game.hp_dealer = (game.hp_dealer + 2).min(game.max_hp);  
+                    game.hp_dealer = (game.hp_dealer + 2).min(game.max_hp);
                 } else {
-                    game.hp_dealer = game.hp_dealer.saturating_sub(1);       
+                    game.hp_dealer = game.hp_dealer.saturating_sub(1);
                 }
                 used_item = Some(ItemType::Pills);
                 emit!(DealerAction { action: DealerActionType::UsedPills, result: is_good });
@@ -385,6 +388,7 @@ pub mod shellshock {
                 }
             }
             _ => {
+                // RULE 2: Consume shell`n        
                 let shell = game.shells.remove(0);
                 game.shells_total -= 1;
                 if shell { game.shells_live -= 1; }
@@ -502,9 +506,12 @@ pub struct Shoot<'info> {
     )]
     pub escrow_vault: SystemAccount<'info>,
 
-    #[account(mut)]
-    /// CHECK: Hardcoded fee wallet for hackathon
-    pub fee_wallet: SystemAccount<'info>,
+    #[account(
+        mut,
+        address = FEE_WALLET_PUBKEY @ ErrorCode::InvalidFeeWallet
+    )]
+    /// CHECK: Hardcoded fee wallet for house
+    pub fee_wallet: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -529,9 +536,12 @@ pub struct ExecuteDealerTurn<'info> {
     )]
     pub escrow_vault: SystemAccount<'info>,
 
-    #[account(mut)]
-    /// CHECK: Hardcoded fee wallet for hackathon
-    pub fee_wallet: SystemAccount<'info>,
+    #[account(
+        mut,
+        address = FEE_WALLET_PUBKEY @ ErrorCode::InvalidFeeWallet
+    )]
+    /// CHECK: Hardcoded fee wallet for house
+    pub fee_wallet: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -681,6 +691,8 @@ pub enum ErrorCode {
     CannotCuffCuffed,
     #[msg("Insufficient funds")]
     InsufficientFunds,
+    #[msg("Invalid fee wallet")]
+    InvalidFeeWallet,
 }
 
 impl GameRoom {
@@ -724,7 +736,7 @@ impl GameRoom {
     }
 
     pub fn dealer_decide_action(&self) -> DealerActionType {
-        // 1. SURVIVAL FIRST
+        // PRIORITY 1: SURVIVAL FIRST
         if self.hp_dealer == 1 && self.items_dealer.contains(&ItemType::Cigarettes) {
             return DealerActionType::UsedCigarettes;
         }
@@ -732,7 +744,7 @@ impl GameRoom {
             return DealerActionType::UsedPills;
         }
 
-        // 2. GUARANTEED KILL
+        // PRIORITY 2: GUARANTEED KILL
         if self.items_dealer.contains(&ItemType::HandSaw)
             && self.shells_live > 0
             && self.hp_player <= 2
@@ -740,7 +752,7 @@ impl GameRoom {
             return DealerActionType::UsedSaw;
         }
 
-        // 3. INFORMATION GATHERING
+        // PRIORITY 3: INFORMATION GATHERING
         if self.items_dealer.contains(&ItemType::MagnifyingGlass)
             && self.shells_live > 0
             && self.shells_total <= 3
@@ -748,7 +760,7 @@ impl GameRoom {
             return DealerActionType::UsedMagnifyingGlass;
         }
 
-        // 4. SHELL MANIPULATION
+        // PRIORITY 4: SHELL MANIPULATION
         if self.items_dealer.contains(&ItemType::Inverter) && self.shells_live == 0 {
             return DealerActionType::UsedInverter;
         }
@@ -759,7 +771,7 @@ impl GameRoom {
             return DealerActionType::UsedBeer;
         }
 
-        // 5. CONTROL
+        // PRIORITY 5: CONTROL
         if self.items_dealer.contains(&ItemType::Handcuffs)
             && !self.player_cuffed
             && self.hp_player <= 3
@@ -767,13 +779,13 @@ impl GameRoom {
             return DealerActionType::UsedHandcuffs;
         }
 
-        // 6. AGGRESSION
+        // PRIORITY 6: AGGRESSION
         if self.items_dealer.contains(&ItemType::HandSaw) && self.shells_live > (self.shells_total / 2)
         {
             return DealerActionType::UsedSaw;
         }
 
-        // 7. HEALING
+        // PRIORITY 7: HEALING
         if self.items_dealer.contains(&ItemType::Cigarettes) && self.hp_dealer <= 3 {
             return DealerActionType::UsedCigarettes;
         }
@@ -781,7 +793,7 @@ impl GameRoom {
             return DealerActionType::UsedPills;
         }
 
-        // 8. DEFAULT
+        // PRIORITY 8: DEFAULT SHOOT
         DealerActionType::Shoot
     }
 }
@@ -812,9 +824,8 @@ fn resolve_game<'info>(
     let signer = &[&seeds[..]];
 
     if winner == 0 {
-        // Player wins: 95% to player, 5% to fee wallet
         anchor_lang::solana_program::program::invoke_signed(
-            &anchor_lang::solana_program::system_instruction::transfer(      
+            &anchor_lang::solana_program::system_instruction::transfer(
                 &vault.key(),
                 &player.key(),
                 payout,
@@ -828,7 +839,7 @@ fn resolve_game<'info>(
         )?;
 
         anchor_lang::solana_program::program::invoke_signed(
-            &anchor_lang::solana_program::system_instruction::transfer(      
+            &anchor_lang::solana_program::system_instruction::transfer(
                 &vault.key(),
                 &fee_wallet.key(),
                 fee,
@@ -841,9 +852,8 @@ fn resolve_game<'info>(
             signer,
         )?;
     } else {
-        // Dealer wins: all to fee wallet
         anchor_lang::solana_program::program::invoke_signed(
-            &anchor_lang::solana_program::system_instruction::transfer(      
+            &anchor_lang::solana_program::system_instruction::transfer(
                 &vault.key(),
                 &fee_wallet.key(),
                 vault_lamports,
@@ -922,3 +932,18 @@ fn generate_shells(game: &mut GameRoom) -> Result<()> {
 
     Ok(())
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
