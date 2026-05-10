@@ -1,5 +1,4 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::pubkey;
 
 declare_id!("FVi3CE8X75fAZ5x1MPnwJ2UikDUe6go4unT7iQiCxzok");
 
@@ -407,6 +406,143 @@ pub mod shellshock {
         }
 
         game.last_action_ts = Clock::get()?.unix_timestamp;
+        Ok(())
+    }
+
+    pub fn use_item(ctx: Context<UseItem>, item_type: ItemType) -> Result<()> {
+        let game_key = ctx.accounts.game_room.key();
+        let game = &mut ctx.accounts.game_room;
+
+        // STEP 1 - Validations (in this exact order):
+        require!(game.current_turn == 0, ErrorCode::NotYourTurn);
+        require!(
+            matches!(game.state, GameState::PlayerTurn),
+            ErrorCode::GameNotActive
+        );
+        require!(
+            !game.shells.is_empty()
+                || item_type == ItemType::Cigarettes
+                || item_type == ItemType::HandSaw
+                || item_type == ItemType::Handcuffs
+                || item_type == ItemType::Pills,
+            ErrorCode::GameNotActive
+        );
+
+        // STEP 2 - Remove item from player inventory:
+        remove_item(&mut game.items_player, item_type)?;
+
+        // STEP 3 - Execute item effect (match on item_type):
+        match item_type {
+            ItemType::Beer => {
+                require!(!game.shells.is_empty(), ErrorCode::GameNotActive);
+                let shell = game.shells.remove(0);
+                game.shells_total -= 1;
+                if shell {
+                    game.shells_live -= 1;
+                }
+                // Emit what the ejected shell was (for animation)
+                emit!(ShellFired {
+                    shooter: 0,
+                    target: 0,
+                    was_live: shell,
+                    dmg: 0, // Beer does no damage
+                });
+                if game.shells_total == 0 {
+                    game.round += 1;
+                    generate_shells(game)?;
+                    emit!(RoundReloaded {
+                        round: game.round,
+                        total_shells: game.shells_total,
+                        live_count: game.shells_live,
+                    });
+                }
+            }
+            ItemType::MagnifyingGlass => {
+                require!(!game.shells.is_empty(), ErrorCode::GameNotActive);
+                let is_live = *game.shells.first().unwrap();
+                // IMPORTANT: does NOT modify shells or any state
+                // Just reveals what the current shell is
+                emit!(MagnifyingGlassReveal { is_live });
+            }
+            ItemType::Cigarettes => {
+                require!(game.hp_player < game.max_hp, ErrorCode::MaxHealthReached);
+                game.hp_player = (game.hp_player + 1).min(game.max_hp);
+                // No shell required, can be used anytime
+            }
+            ItemType::HandSaw => {
+                // Doubles damage of next shot - saw_active flag is checked in shoot()
+                game.saw_active = true;
+                // No shell required
+            }
+            ItemType::Handcuffs => {
+                // In PvE: cuffing the dealer skips its next turn
+                require!(!game.dealer_cuffed, ErrorCode::CannotCuffCuffed);
+                game.dealer_cuffed = true;
+                // advance_turn() in execute_dealer_turn already checks dealer_cuffed
+            }
+            ItemType::Pills => {
+                // Result is pre-determined by pills_bitmask (set in generate_shells)
+                // bit=1: +2HP (capped at max_hp=5), bit=0: -1HP
+                let bit = (game.pills_bitmask >> (game.pills_index % 8)) & 1;
+                game.pills_index = game.pills_index.saturating_add(1);
+                if bit == 1 {
+                    game.hp_player = ((game.hp_player as u16) + 2).min(game.max_hp as u16) as u8;
+                } else {
+                    game.hp_player = game.hp_player.saturating_sub(1);
+                }
+                // Pills can be fatal - check if player killed themselves
+                if game.hp_player == 0 {
+                    resolve_game(
+                        game,
+                        game_key,
+                        &ctx.accounts.escrow_vault.to_account_info(),
+                        1, // dealer wins
+                        &ctx.accounts.fee_wallet.to_account_info(),
+                        &ctx.accounts.player.to_account_info(),
+                        &ctx.accounts.system_program,
+                        ctx.bumps.escrow_vault,
+                    )?;
+                    return Ok(());
+                }
+            }
+            ItemType::Inverter => {
+                require!(!game.shells.is_empty(), ErrorCode::GameNotActive);
+                let shell_is_live = game.shells[0];
+                // Flip the current shell: live becomes blank and vice versa
+                if shell_is_live {
+                    game.shells_live = game.shells_live.saturating_sub(1); // was live, now blank
+                } else {
+                    game.shells_live = game.shells_live.saturating_add(1); // was blank, now live
+                }
+                game.shells[0] = !shell_is_live;
+                // Note: player now knows what the shell is after inverting
+            }
+            ItemType::BurnerPhone => {
+                require!(!game.shells.is_empty(), ErrorCode::GameNotActive);
+                // Reveals a random shell position (not position 0 if more than 1 shell)
+                // Use timestamp as entropy source (not cryptographic, fine for hackathon)
+                let ts = Clock::get()?.unix_timestamp as usize;
+                let idx = if game.shells.len() == 1 {
+                    0
+                } else {
+                    // Pick index != 0 so it's different from what MagnifyingGlass shows
+                    1 + (ts % (game.shells.len() - 1))
+                };
+                emit!(BurnerPhoneReveal {
+                    position: idx as u8,
+                    is_live: game.shells[idx],
+                });
+                // Does NOT modify shells
+            }
+        }
+
+        // STEP 4 - Update timestamp and emit:
+        game.last_action_ts = Clock::get()?.unix_timestamp;
+        emit!(ItemUsed {
+            player: 0,
+            item: item_type
+        });
+
         Ok(())
     }
 }
@@ -948,3 +1084,42 @@ fn generate_shells(game: &mut GameRoom) -> Result<()> {
 
 
 
+
+#[derive(Accounts)]
+pub struct UseItem<'info> {
+    #[account(mut)]
+    pub player: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"game", player.key().as_ref()],
+        has_one = player,
+        bump = game_room.bump
+    )]
+    pub game_room: Account<'info, GameRoom>,
+
+    #[account(
+        mut,
+        seeds = [b"escrow", game_room.key().as_ref()],
+        bump
+    )]
+    pub escrow_vault: SystemAccount<'info>,
+
+    #[account(
+        mut,
+        address = FEE_WALLET_PUBKEY @ ErrorCode::InvalidFeeWallet
+    )]
+    /// CHECK: Hardcoded fee wallet for house
+    pub fee_wallet: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+fn remove_item(items: &mut Vec<ItemType>, item: ItemType) -> Result<()> {
+    if let Some(pos) = items.iter().position(|&i| i == item) {
+        items.remove(pos);
+        Ok(())
+    } else {
+        err!(ErrorCode::ItemNotOwned)
+    }
+}
