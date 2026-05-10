@@ -1,10 +1,10 @@
 use anchor_lang::prelude::*;
-use solana_program::pubkey;
+use anchor_lang::solana_program::pubkey;
 
 declare_id!("FVi3CE8X75fAZ5x1MPnwJ2UikDUe6go4unT7iQiCxzok");
 
 // Replace with your team's actual devnet pubkey
-pub const FEE_WALLET_PUBKEY: Pubkey = pubkey!("7m6C1hGvG5...placeholder..."); 
+pub const FEE_WALLET_PUBKEY: Pubkey = pubkey!("14SX39WGJcte3LoFscbapt487FNXPhy5oRNho6fYC56D"); 
 
 #[program]
 pub mod shellshock {
@@ -932,6 +932,7 @@ fn generate_shells(game: &mut GameRoom) -> Result<()> {
 
     Ok(())
 }
+
 
 
 
