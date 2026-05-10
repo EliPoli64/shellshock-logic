@@ -186,7 +186,7 @@ async function startNewGame(betAmountSOL: number) {
 
 ## 🎥 Demos
 
-- **Live Demo**: https://shellshock-uidfbdfb-3gxomji3f-tec-quinox-s-projects.vercel.app/
+- **Live Demo**: https://shellshock-uidfbdfb.vercel.app/?_vercel_share=w72Q3juyAS0gAKIE1roabHnI1eEKYgmq
 - **Demo Video**: https://youtu.be/JP-Je-qzT-U
 
 ---
